@@ -1,0 +1,22 @@
+{
+  "emotion_classes": [
+    "neutral",
+    "happy",
+    "sad",
+    "angry",
+    "fearful",
+    "disgust"
+  ],
+  "emotion_map": {
+    "neutral": 0,
+    "happy": 1,
+    "sad": 2,
+    "angry": 3,
+    "fearful": 4,
+    "disgust": 5
+  },
+  "num_classes": 6,
+  "excluded_emotions": [
+    "surprised"
+  ]
+}
