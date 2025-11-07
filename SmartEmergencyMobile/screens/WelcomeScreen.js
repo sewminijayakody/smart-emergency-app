@@ -1,6 +1,8 @@
 import React from "react";
 import { View, Text, Image, TouchableOpacity, StyleSheet } from "react-native";
 
+import { API_URL } from "../App";
+
 export default function WelcomeScreen({ navigation }) {
   return (
     <View style={styles.container}>

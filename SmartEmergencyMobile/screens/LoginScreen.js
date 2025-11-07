@@ -13,6 +13,8 @@ import {
 } from 'react-native';
 import axios from 'axios';
 
+import { API_URL } from "../App";
+
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -27,7 +29,7 @@ export default function LoginScreen({ navigation }) {
     setLoading(true);
 
     try {
-      const res = await axios.post('http://192.168.100.29:5000/api/auth/login', {
+      const res = await axios.post('http://192.168.8.114:5000/api/auth/login', {
         email,
         password,
       });

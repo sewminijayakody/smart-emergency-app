@@ -10,12 +10,17 @@ import {
   Dimensions,
   Animated,
   StatusBar,
-  SafeAreaView,
+  Platform,
+  PermissionsAndroid,
 } from "react-native"
+import { SafeAreaView } from "react-native-safe-area-context"
 import * as Location from "expo-location"
-import { Audio } from "expo-av"
+import { Audio } from 'expo-av';
+
 import axios from "axios"
 import { LinearGradient } from "expo-linear-gradient"
+
+import { API_URL } from "../App";
 
 const { width, height } = Dimensions.get("window")
 
@@ -28,8 +33,8 @@ const HomeScreen = () => {
   const [user, setUser] = useState({ name: "Sarah", phone: "+1234567890" })
 
   // Server URLs (hidden from user)
-  const NODE_SERVER_URL = "http://192.168.100.29:5000"
-  const FLASK_SERVER_URL = "http://192.168.100.29:5001"
+  const NODE_SERVER_URL = "http://192.168.8.114:5000"
+  const FLASK_SERVER_URL = "http://192.168.8.114:5001"
 
   useEffect(() => {
     initializeApp()
@@ -65,38 +70,75 @@ const HomeScreen = () => {
 
   const checkConnection = async () => {
     try {
-      const response = await axios.get(`${FLASK_SERVER_URL}/api/health`, { timeout: 3000 })
+      const response = await axios.get(`${FLASK_SERVER_URL}/api/health`, {
+        timeout: 3000,
+      })
       setIsConnected(response.status === 200)
-    } catch (err) {
+    } catch {
       setIsConnected(false)
     }
   }
 
   const setupLocation = async () => {
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync()
-      if (status === "granted") {
+      const { status, granted } = await Location.requestForegroundPermissionsAsync()
+      const ok = granted === true || status === "granted"
+      if (ok) {
         const loc = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.High,
         })
         setLocation(loc)
       }
     } catch (err) {
-      console.error("Location setup failed")
+      console.error("Location setup failed", err)
     }
   }
 
   const setupAudio = async () => {
     try {
-      const { status } = await Audio.requestPermissionsAsync()
-      if (status === "granted") {
+      let micGranted = false
+
+      if (Platform.OS === "android") {
+        const res = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO)
+        micGranted = res === PermissionsAndroid.RESULTS.GRANTED
+        console.log("[v0] Android mic permission:", micGranted)
+      } else {
+        try {
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: true,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+          })
+          micGranted = true
+          console.log("[v0] iOS audio mode set successfully")
+        } catch (iosErr) {
+          console.log("[v0] iOS permission denied or audio setup failed:", iosErr)
+          micGranted = false
+        }
+      }
+
+      if (!micGranted) {
+        Alert.alert("Microphone Permission", "Please grant microphone access to enable voice monitoring.")
+        return
+      }
+
+      if (Platform.OS === "android") {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: true,
           playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
         })
       }
     } catch (err) {
-      console.error("Audio setup failed")
+      console.error("Audio setup failed", err)
+      Alert.alert(
+        "Audio Setup",
+        "Audio initialization failed. Please ensure you're using a development build with EAS.",
+      )
     }
   }
 
@@ -105,9 +147,8 @@ const HomeScreen = () => {
       Alert.alert("Location Required", "Please enable location services for emergency alerts.")
       return
     }
-
     try {
-      const response = await axios.post(`${NODE_SERVER_URL}/api/emergency/sos`, {
+      await axios.post(`${NODE_SERVER_URL}/api/emergency/sos`, {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
         timestamp: new Date().toISOString(),
@@ -119,7 +160,7 @@ const HomeScreen = () => {
         "Your location has been shared with emergency contacts and authorities.",
         [{ text: "OK", style: "default" }],
       )
-    } catch (err) {
+    } catch {
       Alert.alert("Emergency Alert", "Alert sent via backup system!")
     }
   }
@@ -127,8 +168,11 @@ const HomeScreen = () => {
   const startVoiceMonitoring = async () => {
     try {
       setIsListening(true)
+      console.log("[v0] Starting voice monitoring...")
 
       const recordingInstance = new Audio.Recording()
+      console.log("[v0] Recording instance created:", recordingInstance)
+
       const recordingOptions = {
         android: {
           extension: ".wav",
@@ -150,23 +194,33 @@ const HomeScreen = () => {
         },
       }
 
+      console.log("[v0] Preparing to record with options:", recordingOptions)
       await recordingInstance.prepareToRecordAsync(recordingOptions)
+      console.log("[v0] Recording prepared successfully")
+
       await recordingInstance.startAsync()
+      console.log("[v0] Recording started successfully")
+
       setRecording(recordingInstance)
 
-      // Auto-stop after 5 seconds
       setTimeout(() => {
         stopVoiceMonitoring()
       }, 5000)
     } catch (err) {
+      console.error("[v0] Voice monitoring error:", err)
+      console.error("[v0] Error message:", err.message)
+      console.error("[v0] Error stack:", err.stack)
       setIsListening(false)
-      Alert.alert("Voice Monitoring", "Unable to start voice monitoring. Please try again.")
+      Alert.alert("Voice Monitoring", `Unable to start voice monitoring. Error: ${err.message}`)
     }
   }
 
   const stopVoiceMonitoring = async () => {
     try {
-      if (!recording) return
+      if (!recording) {
+        setIsListening(false)
+        return
+      }
 
       await recording.stopAndUnloadAsync()
       const uri = recording.getURI()
@@ -175,6 +229,8 @@ const HomeScreen = () => {
 
       if (uri) {
         await analyzeVoiceForDanger(uri)
+      } else {
+        Alert.alert("Analysis Complete", "Voice monitoring stopped.")
       }
     } catch (err) {
       setIsListening(false)
@@ -197,15 +253,14 @@ const HomeScreen = () => {
         timeout: 15000,
       })
 
-      const { emotion, confidence } = response.data
-
+      const { emotion, confidence } = response.data || {}
       const dangerousEmotions = ["angry", "fearful"]
       const isDangerous = dangerousEmotions.includes(emotion) && confidence > 0.6
 
       if (isDangerous) {
         Alert.alert(
           "⚠️ Potential Danger Detected",
-          `Detected signs of distress. Would you like to send an emergency alert?`,
+          "Detected signs of distress. Would you like to send an emergency alert?",
           [
             { text: "False Alarm", style: "cancel" },
             { text: "Send Alert", onPress: sendEmergencySOS, style: "destructive" },
@@ -218,7 +273,6 @@ const HomeScreen = () => {
           sad: "💙 Take care of yourself",
           disgust: "😐 Everything okay?",
         }
-
         const message = safeMessages[emotion] || "✅ Monitoring complete"
         Alert.alert("Voice Check Complete", message)
       }
@@ -235,6 +289,7 @@ const HomeScreen = () => {
       <View style={styles.header}>
         <Text style={styles.greeting}>Hello, {user.name}</Text>
         <Text style={styles.subtitle}>You're protected 24/7</Text>
+
         <View style={styles.statusIndicator}>
           <View style={[styles.statusDot, { backgroundColor: isConnected ? "#10B981" : "#F59E0B" }]} />
           <Text style={styles.statusText}>{isConnected ? "Protected" : "Offline Mode"}</Text>
@@ -277,12 +332,10 @@ const HomeScreen = () => {
           <Text style={styles.quickActionIcon}>📍</Text>
           <Text style={styles.quickActionText}>Share Location</Text>
         </TouchableOpacity>
-
         <TouchableOpacity style={styles.quickActionButton}>
           <Text style={styles.quickActionIcon}>📞</Text>
           <Text style={styles.quickActionText}>Call Contact</Text>
         </TouchableOpacity>
-
         <TouchableOpacity style={styles.quickActionButton}>
           <Text style={styles.quickActionIcon}>🚨</Text>
           <Text style={styles.quickActionText}>Fake Call</Text>
@@ -293,6 +346,7 @@ const HomeScreen = () => {
       {location && (
         <View style={styles.locationStatus}>
           <Text style={styles.locationText}>
+            {" "}
             📍 Location: {location.coords.latitude.toFixed(4)}, {location.coords.longitude.toFixed(4)}
           </Text>
         </View>
@@ -317,12 +371,12 @@ const styles = StyleSheet.create({
   greeting: {
     fontSize: 28,
     fontWeight: "bold",
-    color: "#333", // changed from white to dark text for pink background
+    color: "#333",
     marginBottom: 5,
   },
   subtitle: {
     fontSize: 16,
-    color: "#333", // changed from white to dark text
+    color: "#333",
     marginBottom: 15,
   },
   statusIndicator: {
@@ -388,7 +442,7 @@ const styles = StyleSheet.create({
     marginVertical: 20,
   },
   voiceButton: {
-    backgroundColor: "#ffb6c1", // pink background same as login button
+    backgroundColor: "#ffb6c1",
     borderRadius: 40,
     paddingVertical: 14,
     paddingHorizontal: 20,
@@ -396,7 +450,7 @@ const styles = StyleSheet.create({
     borderWidth: 0,
   },
   voiceButtonActive: {
-    backgroundColor: "#f06292", // darker pink when active
+    backgroundColor: "#f06292",
   },
   voiceButtonContent: {
     alignItems: "center",
@@ -424,7 +478,7 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   quickActionButton: {
-    backgroundColor: "#ffb6c1", // pink background
+    backgroundColor: "#ffb6c1",
     borderRadius: 15,
     padding: 15,
     alignItems: "center",
@@ -444,7 +498,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   locationStatus: {
-    backgroundColor: "#e3d9dbff", // pink background
+    backgroundColor: "#e3d9dbff",
     borderRadius: 10,
     padding: 10,
     marginTop: 20,
