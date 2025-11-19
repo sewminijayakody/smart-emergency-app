@@ -13,6 +13,9 @@ import {
 } from 'react-native';
 import axios from 'axios';
 
+// FIXED: Import live backend URL from App.js
+import { API_URL } from "../App";
+
 export default function RegisterScreen({ navigation }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -27,16 +30,21 @@ export default function RegisterScreen({ navigation }) {
 
     setLoading(true);
     try {
-      const res = await axios.post('http://192.168.8.114:5000/api/auth/register', {
+      // FIXED: Using API_URL + correct /api/auth/register
+      const res = await axios.post(`${API_URL}/api/auth/register`, {
         name,
         email,
         password,
       });
-      Alert.alert('Success', 'Registered! Please login.');
+
+      Alert.alert('Success', 'Account created! Please login.');
       navigation.navigate('Login');
     } catch (err) {
-      console.log(err.response?.data || err.message);
-      Alert.alert('Error', err.response?.data?.msg || 'Something went wrong');
+      console.log('Register error:', err.response?.data || err.message);
+      const errorMsg = err.response?.data?.msg || 
+                      err.response?.data?.message || 
+                      'Registration failed. Try another email.';
+      Alert.alert('Registration Failed', errorMsg);
     } finally {
       setLoading(false);
     }
@@ -48,7 +56,7 @@ export default function RegisterScreen({ navigation }) {
       behavior={Platform.select({ ios: 'padding', android: undefined })}
     >
       <View style={styles.card}>
-        {/* Small Logo with Letters */}
+        {/* Logo */}
         <View style={[styles.logoContainer, { marginBottom: 40 }]}>
           <Image source={require('../assets/safeher.png')} style={styles.image} />
           <Text style={[styles.letter, { top: -8, left: '21%' }]}>H</Text>
@@ -120,6 +128,7 @@ export default function RegisterScreen({ navigation }) {
   );
 }
 
+// Your beautiful styles — 100% unchanged
 const styles = StyleSheet.create({
   container: {
     flex: 1,

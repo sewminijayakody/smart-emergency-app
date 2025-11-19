@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "995917f9-2509-4217-ac32-032731ae0a2d"
+      }
+    },
+    "android": {
+      "package": "com.sew12.smartemergencyapp"
+    }
+  }
+}

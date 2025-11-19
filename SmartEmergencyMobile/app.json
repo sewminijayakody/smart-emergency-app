@@ -2,37 +2,49 @@
   "expo": {
     "name": "SmartEmergencyMobile",
     "slug": "SmartEmergencyMobile",
-    "entryPoint": "./App.js"  ,
-    
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "expo.jsEngine": "hermes", 
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Aido needs microphone access to detect fear or danger in your voice."
+      }
     },
     "android": {
+      "minSdkVersion": 24,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "package": "com.anonymous.SmartEmergencyMobile"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-audio",
-      "expo-asset",
-      "expo-video"
-    ]
-  
+      "expo-dev-client",
+      "expo-av",
+      "expo-asset"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "31fee4fc-015b-472b-88aa-86798be4e3de"
+      }
+    },
+    "owner": "sew12"
   }
 }

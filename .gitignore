@@ -395,3 +395,6 @@ app-example
 # RAVDESS Dataset
 AI-Training/ravdess_dataset/
 AI-Training/pytorch_env/
+
+.expo/
+.serviceAccountKey.json/

@@ -12,7 +12,6 @@ import {
   Image,
 } from 'react-native';
 import axios from 'axios';
-
 import { API_URL } from "../App";
 
 export default function LoginScreen({ navigation }) {
@@ -29,16 +28,43 @@ export default function LoginScreen({ navigation }) {
     setLoading(true);
 
     try {
-      const res = await axios.post('http://192.168.8.114:5000/api/auth/login', {
-        email,
-        password,
+      const response = await axios({
+        method: 'POST',
+        url: `${API_URL}/api/auth/login`,
+        data: {
+          email: email.trim().toLowerCase(),
+          password: password.trim()
+        },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        timeout: 15000
       });
 
-      const token = res.data.token;
-      navigation.navigate('Home', { token });
+      // FIXED: Only expect { token }, not { token, user }
+      const { token } = response.data;
+
+      if (!token) {
+        throw new Error("No token received");
+      }
+
+      Alert.alert('SUCCESS!', 'Welcome back! You are now logged in.');
+      navigation.replace('Home', { token }); // replace = no back to login
+
     } catch (err) {
-      console.log(err.response?.data || err.message);
-      Alert.alert('Error', err.response?.data?.msg || 'Login failed');
+      console.log('LOGIN ERROR:', err.response?.data || err.message);
+
+      let errorMessage = 'Login failed. Please try again.';
+      if (err.response?.data?.msg) {
+        errorMessage = err.response.data.msg;
+      } else if (err.message.includes('Network')) {
+        errorMessage = 'No internet connection';
+      } else if (err.code === 'ECONNABORTED') {
+        errorMessage = 'Server timeout — try again';
+      }
+
+      Alert.alert('Login Failed', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -47,15 +73,12 @@ export default function LoginScreen({ navigation }) {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.select({ ios: 'padding', android: undefined })}
+      behavior={Platform.select({ ios: 'padding', android: 'height' })}
     >
       <View style={styles.card}>
-        {/* Small Logo with Letters */}
-          <View style={[styles.logoContainer, { marginBottom: 40 }]}>
-          <Image
-            source={require('../assets/safeher.png')}
-            style={styles.image}
-          />
+        {/* Logo */}
+        <View style={[styles.logoContainer, { marginBottom: 40 }]}>
+          <Image source={require('../assets/safeher.png')} style={styles.image} />
           <Text style={[styles.letter, { top: -8, left: '21%' }]}>H</Text>
           <Text style={[styles.letter, { top: 5, right: -10 }]}>E</Text>
           <Text style={[styles.letter, { top: 28, right: -18 }]}>R</Text>
@@ -74,10 +97,11 @@ export default function LoginScreen({ navigation }) {
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
             style={styles.input}
             placeholder="Enter your email"
             placeholderTextColor="#7a7a7a"
-            autoCapitalize="none"
           />
 
           <Text style={styles.label}>Password</Text>
@@ -105,7 +129,6 @@ export default function LoginScreen({ navigation }) {
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.navigate('Register')}
-            disabled={loading}
           >
             <Text style={[styles.buttonText, { color: '#333' }]}>Back to Register</Text>
           </TouchableOpacity>
@@ -130,8 +153,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     alignItems: 'center',
   },
-  imageContainer: {
-    marginBottom: 10,
+  logoContainer: {
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
