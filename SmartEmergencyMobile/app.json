@@ -40,8 +40,8 @@
       "expo-dev-client",
       "expo-av",
       "expo-asset",
-    
-      "expo-notifications"
+      "expo-notifications",
+      "expo-firebase-core"
     ],
     "extra": {
       "eas": {
