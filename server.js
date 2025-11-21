@@ -50,7 +50,7 @@ app.post('/api/analyze_audio', upload.single('audio'), async (req, res) => {
       'https://your-flask-server.onrender.com/api/analyze_audio';
   } else {
     // local dev -> your Flask is on 5001
-    flaskUrl = process.env.FLASK_URL || 'http://localhost:5001/api/analyze_audio';
+    flaskUrl = process.env.FLASK_URL || 'http://192.168.8.114:5001/api/analyze_audio';
   }
 
   console.log('[DEBUG] Using Flask URL:', flaskUrl);
@@ -147,7 +147,7 @@ app.get('/api/health', (req, res) => {
       process.env.NODE_ENV === 'production'
         ? process.env.FLASK_URL ||
           'https://your-flask-server.onrender.com/api/analyze_audio'
-        : process.env.FLASK_URL || 'http://localhost:5001/api/analyze_audio',
+        : process.env.FLASK_URL || 'http://192.168.8.114:5001/api/analyze_audio',
   });
 });
 
@@ -188,7 +188,7 @@ app.listen(PORT, '0.0.0.0', () => {
       process.env.NODE_ENV === 'production'
         ? process.env.FLASK_URL ||
           'https://your-flask-server.onrender.com/api/analyze_audio'
-        : process.env.FLASK_URL || 'http://localhost:5001/api/analyze_audio'
+        : process.env.FLASK_URL || 'http://192.168.8.114:5001/api/analyze_audio'
     }`
   );
 });

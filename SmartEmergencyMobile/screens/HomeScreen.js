@@ -37,8 +37,8 @@ const { width, height } = Dimensions.get("window");
 
 // Flask URL (direct)
 const FLASK_URL = __DEV__
-  ? `${AI_URL}/api/analyze_audio`
-  : `${AI_URL}/api/analyze_audio`;
+  ? "http:/192.168.8.114:5000//api/analyze_audio"
+  : "http://192.168.8.114:5001/api/analyze_audio";
 
 const HomeScreen = ({ route, navigation }) => {
   const [recording, setRecording] = useState(null);
