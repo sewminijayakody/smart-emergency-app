@@ -19,6 +19,7 @@ import {
   Platform,
   PermissionsAndroid,
   Image,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Location from "expo-location";
@@ -30,15 +31,13 @@ import * as Notifications from "expo-notifications";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 
-// IMPORT API_URL FROM APP.JS
 import { API_URL, AI_URL } from "../App";
 
-const { width, height } = Dimensions.get("window");
-
-// Flask URL (direct)
+// During development, talk directly to Flask for emotion checks
 const FLASK_URL = __DEV__
-  ? "http:/192.168.8.114:5000//api/analyze_audio"
-  : "http://192.168.8.114:5001/api/analyze_audio";
+  ? `${AI_URL}/api/analyze_audio`       // 👉 http://192.168.8.114:5001/api/analyze_audio
+  : `${API_URL}/api/analyze_audio`;     // In prod, you can still go through Node proxy
+
 
 const HomeScreen = ({ route, navigation }) => {
   const [recording, setRecording] = useState(null);
@@ -49,6 +48,13 @@ const HomeScreen = ({ route, navigation }) => {
   const [pulseAnim] = useState(new Animated.Value(1));
   const [user, setUser] = useState({ name: "Sarah", phone: "+1234567890" });
   const [avatarUri, setAvatarUri] = useState(null);
+
+  // 🔔 Fake call state
+  const [fakeCallVisible, setFakeCallVisible] = useState(false);
+  const [fakeCallStage, setFakeCallStage] = useState("ringing"); // 'ringing' | 'ongoing'
+  const [fakeCallSeconds, setFakeCallSeconds] = useState(0);
+  const fakeCallTimerRef = useRef(null);
+  const fakeCallSoundRef = useRef(null); // holds ringtone sound
 
   // JWT from navigation
   const token = route?.params?.token || null;
@@ -104,6 +110,10 @@ const HomeScreen = ({ route, navigation }) => {
       if (stopTimerRef.current) {
         clearTimeout(stopTimerRef.current);
       }
+      if (fakeCallTimerRef.current) {
+        clearTimeout(fakeCallTimerRef.current);
+      }
+      stopFakeCallSound(); // stop ringtone on unmount
       try {
         stopVoiceMonitoring().catch((e) =>
           console.warn(
@@ -291,6 +301,98 @@ const HomeScreen = ({ route, navigation }) => {
     }
   };
 
+  // =====================================================
+  // ✅ Record short evidence audio (8s)
+  // =====================================================
+  const recordEvidenceAudio = async () => {
+    try {
+      const { status } = await Audio.requestPermissionsAsync();
+      if (status !== "granted") {
+        console.log("[Evidence] Mic permission not granted");
+        return null;
+      }
+
+      const evidenceRec = new Audio.Recording();
+
+      const options = {
+        android: {
+          extension: ".m4a",
+          outputFormat: Audio.RECORDING_OPTION_ANDROID_OUTPUT_FORMAT_MPEG_4,
+          audioEncoder: Audio.RECORDING_OPTION_ANDROID_AUDIO_ENCODER_AAC,
+          sampleRate: 22050,
+          numberOfChannels: 1,
+          bitRate: 128000,
+        },
+        ios: {
+          extension: ".m4a",
+          audioQuality: Audio.RECORDING_OPTION_IOS_AUDIO_QUALITY_HIGH,
+          sampleRate: 22050,
+          numberOfChannels: 1,
+          bitRate: 128000,
+        },
+      };
+
+      await evidenceRec.prepareToRecordAsync(options);
+      await evidenceRec.startAsync();
+
+      console.log("[Evidence] Recording started (8s)");
+      await new Promise((r) => setTimeout(r, 8000));
+
+      await evidenceRec.stopAndUnloadAsync();
+      const uri = evidenceRec.getURI();
+      console.log("[Evidence] Recording saved:", uri);
+
+      return uri;
+    } catch (err) {
+      console.log("[Evidence] Record error:", err.message);
+      return null;
+    }
+  };
+
+  // =====================================================
+  // ✅ Upload evidence to backend -> S3
+  // Calls: POST /api/emergency/upload-evidence (field "evidence")
+  // =====================================================
+  const uploadEvidence = async (uri) => {
+    if (!uri || !token) return null;
+
+    try {
+      const fileInfo = await FileSystem.getInfoAsync(uri);
+      if (!fileInfo.exists || fileInfo.size <= 0) {
+        console.log("[Evidence] File missing/empty");
+        return null;
+      }
+
+      const formData = new FormData();
+      formData.append("evidence", {
+        uri,
+        name: "evidence.m4a",
+        type: "audio/m4a",
+      });
+
+      const res = await axios.post(
+        `${API_URL}/api/emergency/upload-evidence`,
+        formData,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "multipart/form-data",
+          },
+          timeout: 30000,
+        }
+      );
+
+      console.log("[Evidence] Uploaded URL:", res.data?.evidenceUrl);
+      return res.data?.evidenceUrl || null;
+    } catch (err) {
+      console.log("[Evidence] Upload error:", err.response?.data || err.message);
+      return null;
+    }
+  };
+
+  // =====================================================
+  // ✅ NORMAL SOS: records + uploads evidence
+  // =====================================================
   const sendEmergencySOS = async () => {
     if (!location) {
       Alert.alert(
@@ -301,9 +403,14 @@ const HomeScreen = ({ route, navigation }) => {
     }
 
     try {
+      console.log("[SOS] Capturing evidence first...");
+      const evidenceUri = await recordEvidenceAudio();
+      const evidenceUrl = await uploadEvidence(evidenceUri);
+
       console.log("[DEBUG] 🚨 Sending SOS to backend...");
       console.log("[DEBUG] Location:", location.coords);
       console.log("[DEBUG] Endpoint:", `${API_URL}/api/emergency/sos`);
+      console.log("[DEBUG] Evidence URL:", evidenceUrl || "none");
 
       const headers = {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -316,6 +423,9 @@ const HomeScreen = ({ route, navigation }) => {
           longitude: location.coords.longitude,
           timestamp: new Date().toISOString(),
           userId: user.phone,
+          evidenceUrl: evidenceUrl || null,
+          mode: "NORMAL",
+          source: "MOBILE_SOS",
         },
         {
           headers,
@@ -342,6 +452,138 @@ const HomeScreen = ({ route, navigation }) => {
     }
   };
 
+  // =====================================================
+  // ✅ DISCREET SOS (long press tile)
+  // =====================================================
+  const sendDiscreetSOS = async () => {
+    if (!location) {
+      Alert.alert("Travel tips", "Unable to refresh content. Try again later.");
+      return;
+    }
+
+    try {
+      console.log("[DISCREET] Capturing evidence...");
+      const evidenceUri = await recordEvidenceAudio();
+      const evidenceUrl = await uploadEvidence(evidenceUri);
+
+      const headers = {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+
+      console.log("[DISCREET] Sending discreet SOS...");
+      await axios.post(
+        `${API_URL}/api/emergency/sos`,
+        {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          timestamp: new Date().toISOString(),
+          userId: user.phone,
+          evidenceUrl: evidenceUrl || null,
+          mode: "DISCREET",
+          source: "DISCREET_TILE",
+        },
+        {
+          headers,
+          timeout: 10000,
+        }
+      );
+
+      console.log("[DISCREET] SOS sent silently.");
+      Alert.alert("Travel tips", "Content updated successfully.");
+    } catch (err) {
+      console.error("[DISCREET] SOS error:", err.message);
+      Alert.alert("Travel tips", "Unable to refresh content. Please try again.");
+    }
+  };
+
+  // ==================== FAKE CALL (with sound) =======================
+
+  const stopFakeCallSound = async () => {
+    try {
+      if (fakeCallSoundRef.current) {
+        await fakeCallSoundRef.current.stopAsync();
+        await fakeCallSoundRef.current.unloadAsync();
+        fakeCallSoundRef.current = null;
+      }
+    } catch (e) {
+      console.log("[FakeCall] stop sound error:", e.message);
+    }
+  };
+
+  const resetFakeCall = () => {
+    if (fakeCallTimerRef.current) {
+      clearTimeout(fakeCallTimerRef.current);
+      fakeCallTimerRef.current = null;
+    }
+    setFakeCallSeconds(0);
+  };
+
+  const startFakeCall = async () => {
+    resetFakeCall();
+    await stopFakeCallSound();
+
+    setFakeCallStage("ringing");
+    setFakeCallVisible(true);
+
+    // Load & play ringtone (looping)
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        // 🔔 Make sure this file exists: assets/fake_ringtone.mp3
+        require("../assets/fake_ringtone.mp3"),
+        { isLooping: true, volume: 1.0 }
+      );
+      fakeCallSoundRef.current = sound;
+      await sound.playAsync();
+    } catch (e) {
+      console.log("[FakeCall] Failed to play ringtone:", e.message);
+    }
+
+    // Auto-accept after 5s if user does nothing
+    fakeCallTimerRef.current = setTimeout(() => {
+      setFakeCallStage("ongoing");
+      setFakeCallSeconds(0);
+      stopFakeCallSound(); // stop ringtone when "connected"
+    }, 5000);
+  };
+
+  const acceptFakeCall = () => {
+    resetFakeCall();
+    stopFakeCallSound();
+    setFakeCallStage("ongoing");
+  };
+
+  const declineFakeCall = () => {
+    resetFakeCall();
+    stopFakeCallSound();
+    setFakeCallVisible(false);
+  };
+
+  const endFakeCall = () => {
+    resetFakeCall();
+    stopFakeCallSound();
+    setFakeCallVisible(false);
+  };
+
+  // Simple call timer (only when stage = ongoing)
+  useEffect(() => {
+    if (!fakeCallVisible || fakeCallStage !== "ongoing") return;
+
+    const interval = setInterval(() => {
+      setFakeCallSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [fakeCallVisible, fakeCallStage]);
+
+  const formatCallTime = (sec) => {
+    const m = Math.floor(sec / 60)
+      .toString()
+      .padStart(2, "0");
+    const s = (sec % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  };
+
+  // ================= VOICE MONITORING (unchanged logic) =================
   const startVoiceMonitoring = async () => {
     if (isPreparingRef.current) {
       console.log(
@@ -612,6 +854,10 @@ const HomeScreen = ({ route, navigation }) => {
 
       if (isDanger) {
         console.log("[DEBUG] 🚨🚨🚨 DANGER DETECTED! 🚨🚨🚨");
+
+        // 🔔 Auto-trigger fake call when danger is detected
+        startFakeCall();
+
         Alert.alert(
           "⚠️ DANGER DETECTED",
           `Emotion: ${emotion.toUpperCase()}\nConfidence: ${(
@@ -677,123 +923,206 @@ const HomeScreen = ({ route, navigation }) => {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#ffb6c1" />
 
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <View>
-            <Text style={styles.greeting}>Hello, {user.name}</Text>
-            <Text style={styles.subtitle}>You're protected 24/7</Text>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={styles.headerTop}>
+            <View>
+              <Text style={styles.greeting}>Hello, {user.name}</Text>
+              <Text style={styles.subtitle}>You're protected 24/7</Text>
+            </View>
+
+            {/* Small profile avatar button */}
+            <TouchableOpacity
+              style={styles.profileAvatarContainer}
+              onPress={() => navigation.navigate("Profile", { token })}
+              activeOpacity={0.8}
+            >
+              {avatarUri ? (
+                <Image
+                  source={{ uri: avatarUri }}
+                  style={styles.profileAvatarImage}
+                />
+              ) : (
+                <View style={styles.profileAvatarCircle}>
+                  <Text style={styles.profileAvatarInitial}>
+                    {initialLetter}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
           </View>
 
-          {/* Small profile avatar button */}
-          <TouchableOpacity
-            style={styles.profileAvatarContainer}
-            onPress={() => navigation.navigate("Profile", { token })}
-            activeOpacity={0.8}
-          >
-            {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={styles.profileAvatarImage} />
-            ) : (
-              <View style={styles.profileAvatarCircle}>
-                <Text style={styles.profileAvatarInitial}>{initialLetter}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          <View style={styles.statusIndicator}>
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: isConnected ? "#10B981" : "#F59E0B" },
+              ]}
+            />
+            <Text style={styles.statusText}>
+              {isConnected ? "🟢 Connected" : "🔴 Offline"}
+            </Text>
+          </View>
         </View>
 
-        <View style={styles.statusIndicator}>
-          <View
+        {/* Main Emergency Button */}
+        <View style={styles.emergencySection}>
+          <Animated.View
             style={[
-              styles.statusDot,
-              { backgroundColor: isConnected ? "#10B981" : "#F59E0B" },
+              styles.emergencyButtonContainer,
+              { transform: [{ scale: pulseAnim }] },
             ]}
-          />
-          <Text style={styles.statusText}>
-            {isConnected ? "🟢 Connected" : "🔴 Offline"}
-          </Text>
-        </View>
-      </View>
-
-      {/* Main Emergency Button */}
-      <View style={styles.emergencySection}>
-        <Animated.View
-          style={[
-            styles.emergencyButtonContainer,
-            { transform: [{ scale: pulseAnim }] },
-          ]}
-        >
-          <TouchableOpacity
-            style={styles.emergencyButton}
-            onPress={sendEmergencySOS}
-            activeOpacity={0.8}
           >
-            <LinearGradient
-              colors={["#EF4444", "#DC2626", "#B91C1C"]}
-              style={styles.emergencyButtonGradient}
+            <TouchableOpacity
+              style={styles.emergencyButton}
+              onPress={sendEmergencySOS}
+              activeOpacity={0.8}
             >
-              <Text style={styles.emergencyButtonText}>SOS</Text>
-              <Text style={styles.emergencyButtonSubtext}>Emergency</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-        </Animated.View>
-      </View>
-
-      {/* Voice Monitoring Section */}
-      <View style={styles.voiceSection}>
-        <TouchableOpacity
-          style={[styles.voiceButton, isListening && styles.voiceButtonActive]}
-          onPress={isListening ? stopVoiceMonitoring : startVoiceMonitoring}
-          disabled={!isConnected}
-        >
-          <Text style={styles.voiceIcon}>{isListening ? "🎙️" : "🎤"}</Text>
-          <Text style={styles.voiceButtonText}>
-            {isListening ? "Listening..." : "Voice Check"}
-          </Text>
-          <Text style={styles.voiceButtonSubtext}>
-            {isListening
-              ? "Recording... (auto-stop in 5s)"
-              : "Tap to check your safety"}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Quick Actions */}
-      <View style={styles.quickActions}>
-        <TouchableOpacity style={styles.quickActionButton}>
-          <Text style={styles.quickActionIcon}>📍</Text>
-          <Text style={styles.quickActionText}>Location</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.quickActionButton}
-          onPress={() => navigation.navigate("EmergencyContacts", { token })}
-        >
-          <Text style={styles.quickActionIcon}>☎️</Text>
-          <Text style={styles.quickActionText}>Contact</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.quickActionButton}>
-          <Text style={styles.quickActionIcon}>🔔</Text>
-          <Text style={styles.quickActionText}>Fake Call</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Location Status */}
-      {location && (
-        <View style={styles.locationStatus}>
-          <Text style={styles.locationText}>
-            📍 Lat: {location.coords.latitude.toFixed(4)} | Lng:{" "}
-            {location.coords.longitude.toFixed(4)}
-          </Text>
+              <LinearGradient
+                colors={["#EF4444", "#DC2626", "#B91C1C"]}
+                style={styles.emergencyButtonGradient}
+              >
+                <Text style={styles.emergencyButtonText}>SOS</Text>
+                <Text style={styles.emergencyButtonSubtext}>Emergency</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </Animated.View>
         </View>
-      )}
 
-      {/* Connection Status Info */}
-      {!isConnected && (
-        <View style={styles.warningBanner}>
-          <Text style={styles.warningText}>
-            ⚠️ Backend not connected. Flask server may not be running.
+        {/* Voice Monitoring Section */}
+        <View style={styles.voiceSection}>
+          <TouchableOpacity
+            style={[
+              styles.voiceButton,
+              isListening && styles.voiceButtonActive,
+            ]}
+            onPress={isListening ? stopVoiceMonitoring : startVoiceMonitoring}
+            disabled={!isConnected}
+          >
+            <Text style={styles.voiceIcon}>{isListening ? "🎙️" : "🎤"}</Text>
+            <Text style={styles.voiceButtonText}>
+              {isListening ? "Listening..." : "Voice Check"}
+            </Text>
+            <Text style={styles.voiceButtonSubtext}>
+              {isListening
+                ? "Recording... (auto-stop in 5s)"
+                : "Tap to check your safety"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Quick Actions */}
+        <View style={styles.quickActions}>
+         <TouchableOpacity
+  style={styles.quickActionButton}
+  onPress={() => navigation.navigate("SafetyMap", { token })}
+>
+  <Text style={styles.quickActionIcon}>📍</Text>
+  <Text style={styles.quickActionText}>Location</Text>
+</TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.quickActionButton}
+            onPress={() => navigation.navigate("EmergencyContacts", { token })}
+          >
+            <Text style={styles.quickActionIcon}>☎️</Text>
+            <Text style={styles.quickActionText}>Contact</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.quickActionButton}
+            onPress={startFakeCall}
+          >
+            <Text style={styles.quickActionIcon}>🔔</Text>
+            <Text style={styles.quickActionText}>Fake Call</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* 🔒 Discreet SOS Tile (long press) */}
+        <TouchableOpacity
+          style={styles.discreetCard}
+          activeOpacity={0.9}
+          onLongPress={sendDiscreetSOS}
+          delayLongPress={1500}
+        >
+          <Text style={styles.discreetTitle}>Daily Travel Tips</Text>
+          <Text style={styles.discreetText}>
+            Stay safe and confident wherever you go. Long-press to refresh
+            tips.
           </Text>
+          <Text style={styles.discreetHint}>
+            (Hidden: long-press silently sends a discreet SOS)
+          </Text>
+        </TouchableOpacity>
+
+        {/* Location Status */}
+        {location && (
+          <View style={styles.locationStatus}>
+            <Text style={styles.locationText}>
+              📍 Lat: {location.coords.latitude.toFixed(4)} | Lng:{" "}
+              {location.coords.longitude.toFixed(4)}
+            </Text>
+          </View>
+        )}
+
+        {/* Connection Status Info */}
+        {!isConnected && (
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningText}>
+              ⚠️ Backend not connected. Flask server may not be running.
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* 📱 Fake Call Overlay */}
+      {fakeCallVisible && (
+        <View style={styles.fakeCallOverlay}>
+          <View style={styles.fakeCallCard}>
+            {fakeCallStage === "ringing" ? (
+              <>
+                <Text style={styles.fakeCallLabel}>Incoming call</Text>
+                <Text style={styles.fakeCallName}>Mum</Text>
+                <Text style={styles.fakeCallNumber}>+94 77 123 4567</Text>
+
+                <View style={styles.fakeCallButtonsRow}>
+                  <TouchableOpacity
+                    style={[styles.fakeCallButton, styles.fakeCallButtonDecline]}
+                    onPress={declineFakeCall}
+                  >
+                    <Text style={styles.fakeCallButtonText}>Decline</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.fakeCallButton, styles.fakeCallButtonAccept]}
+                    onPress={acceptFakeCall}
+                  >
+                    <Text style={styles.fakeCallButtonText}>Accept</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.fakeCallLabel}>On call</Text>
+                <Text style={styles.fakeCallName}>Mum</Text>
+                <Text style={styles.fakeCallTimer}>
+                  {formatCallTime(fakeCallSeconds)}
+                </Text>
+
+                <TouchableOpacity
+                  style={[styles.fakeCallButton, styles.fakeCallEndButton]}
+                  onPress={endFakeCall}
+                >
+                  <Text style={styles.fakeCallButtonText}>End Call</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
         </View>
       )}
     </SafeAreaView>
@@ -804,13 +1133,17 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#ff92b1ff",
-    alignItems: "center",
-    justifyContent: "center",
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
     paddingHorizontal: 20,
+    paddingBottom: 24,
   },
   header: {
     paddingTop: 20,
-    paddingBottom: 30,
+    paddingBottom: 20,
     width: "100%",
   },
   headerTop: {
@@ -879,7 +1212,7 @@ const styles = StyleSheet.create({
   },
   emergencySection: {
     alignItems: "center",
-    marginVertical: 30,
+    marginVertical: 20,
   },
   emergencyButtonContainer: {
     marginBottom: 10,
@@ -912,7 +1245,8 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   voiceSection: {
-    marginVertical: 30,
+    marginVertical: 20,
+    alignItems: "center",
   },
   voiceButton: {
     backgroundColor: "#ffb6c1",
@@ -980,12 +1314,111 @@ const styles = StyleSheet.create({
     padding: 12,
     marginTop: 15,
     width: "100%",
+    marginBottom: 12,
   },
   warningText: {
     color: "white",
     fontSize: 12,
     fontWeight: "500",
     textAlign: "center",
+  },
+
+  // Discreet tile styles
+  discreetCard: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 10,
+    width: "100%",
+  },
+  discreetTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 4,
+  },
+  discreetText: {
+    fontSize: 13,
+    color: "#333",
+  },
+  discreetHint: {
+    fontSize: 11,
+    color: "#555",
+    marginTop: 6,
+  },
+
+  // 📱 Fake Call overlay styles
+  fakeCallOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  fakeCallCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 24,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    backgroundColor: "#111827",
+    alignItems: "center",
+  },
+  fakeCallLabel: {
+    fontSize: 14,
+    color: "#9CA3AF",
+    marginBottom: 8,
+  },
+  fakeCallName: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#F9FAFB",
+    marginBottom: 4,
+  },
+  fakeCallNumber: {
+    fontSize: 14,
+    color: "#D1D5DB",
+    marginBottom: 20,
+  },
+  fakeCallButtonsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+    marginTop: 12,
+  },
+  fakeCallButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 999,
+    alignItems: "center",
+    marginHorizontal: 4,
+  },
+  fakeCallButtonAccept: {
+    backgroundColor: "#22C55E",
+  },
+  fakeCallButtonDecline: {
+    backgroundColor: "#EF4444",
+  },
+  fakeCallButtonText: {
+    color: "#F9FAFB",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  fakeCallTimer: {
+    fontSize: 18,
+    color: "#10B981",
+    marginVertical: 16,
+  },
+  fakeCallEndButton: {
+    backgroundColor: "#EF4444",
+    paddingVertical: 10,
+    paddingHorizontal: 40,
+    borderRadius: 999,
+    marginTop: 8,
   },
 });
 

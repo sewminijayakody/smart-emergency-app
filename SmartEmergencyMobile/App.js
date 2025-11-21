@@ -9,6 +9,7 @@ import LoginScreen from './screens/LoginScreen';
 import HomeScreen from './screens/HomeScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import EmergencyContactsScreen from './screens/EmergencyContactsScreen';
+import SafetyMapScreen from "./screens/SafetyMapScreen";
 
 // =======================
 // BASE URLs
@@ -16,12 +17,12 @@ import EmergencyContactsScreen from './screens/EmergencyContactsScreen';
 
 // Node / Express backend (auth, SOS, MongoDB)
 export const API_URL = __DEV__
-  ? 'http://10.0.2.2:5000'              // Android emulator → host PC
+  ? 'http://192.168.8.114:5000'              // Android emulator → host PC
   : 'https://smart-emergency-app.onrender.com'; // Production / Render
 
 // Flask AI server (emotion analysis)
 export const AI_URL = __DEV__
-  ? 'http://10.0.2.2:5001'              // Android emulator → Flask on host PC
+  ? 'http://192.168.8.114:5001'              // Android emulator → Flask on host PC
   : 'https://your-flask-ai-server.com'; // TODO: change when you deploy Flask
 
 // 🔔 Configure how notifications behave when received
@@ -49,6 +50,11 @@ export default function App() {
         <Stack.Screen name="Home" component={HomeScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
         <Stack.Screen name="EmergencyContacts" component={EmergencyContactsScreen} />
+        <Stack.Screen
+          name="SafetyMap"
+          component={SafetyMapScreen}
+          options={{ title: "Safety Map" }}
+        />
       </Stack.Navigator>
     </NavigationContainer>
   );
