@@ -398,3 +398,24 @@ AI-Training/pytorch_env/
 
 .expo/
 .serviceAccountKey.json/
+
+.SmartEmergencyMobile/app.json
+
+# Mobile app config (contains keys)
+SmartEmergencyMobile/app.json
+
+# Google/Firebase secrets
+SmartEmergencyMobile/google-services.json
+serviceAccountKey.json
+google_key/
+
+# Build artifacts
+SmartEmergencyMobile/final-app.apk
+
+# (Optional) training data & models
+AI-Training/
+data/
+synthetic_data/
+SmartEmergencyMobile/assets/model/
+SmartEmergencyMobile/assets/scaler/
+
